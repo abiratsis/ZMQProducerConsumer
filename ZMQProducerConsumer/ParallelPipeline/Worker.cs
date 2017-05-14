@@ -1,47 +1,82 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Text;
+using System.Threading;
 
-//using ZeroMQ;
+using ZeroMQ;
 
 namespace ZMQProducerConsumer.ParallelPipeline
 {
-    class Worker
+    public class Worker
     {
-        public static void TaskWork(string[] args)
+        private static readonly object _lock = new object();
+        private readonly int workerId;
+
+        public int ProcessedMessages;
+
+        public static int WorkerNum;
+        
+        public Worker()
         {
-            //
-            // Task worker
-            // Connects PULL socket to tcp://127.0.0.1:5557
-            // Collects workloads from ventilator via that socket
-            // Connects PUSH socket to tcp://127.0.0.1:5558
-            // Sends results to sink via that socket
-            //
-            // Author: metadings
-            //
+            lock (_lock)
+            {
+                WorkerNum++;
+                workerId = WorkerNum;
+            }
+        }
 
-            // Socket to receive messages on and
-            // Socket to send messages to
-            //using (var context = new ZContext())
-            //using (var receiver = new ZSocket(context, ZSocketType.PULL))
-            //using (var sink = new ZSocket(context, ZSocketType.PUSH))
-            //{
-            //    receiver.Connect("tcp://127.0.0.1:5557");
-            //    sink.Connect("tcp://127.0.0.1:5558");
+        public void Run(CancellationToken cancellationToken)
+        {
+            using (var context = new ZContext())
+            using (var receiver = new ZSocket(context, ZSocketType.PULL))
+            using (var sink = new ZSocket(context, ZSocketType.PUSH))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    Console.WriteLine($"Woker{workerId} cancelled....");
 
-            //    // Process tasks forever
-            //    while (true)
-            //    {
-            //        var replyBytes = new byte[4];
-            //        receiver.ReceiveBytes(replyBytes, 0, replyBytes.Length);
-            //        int workload = BitConverter.ToInt32(replyBytes, 0);
-            //        Console.WriteLine("{0}.", workload);    // Show progress
+                    context.Shutdown();
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
 
-            //        Thread.Sleep(workload);    // Do the work
+                receiver.Connect("tcp://127.0.0.1:5557");
+                sink.Connect("tcp://127.0.0.1:5558");
 
-            //        sink.Send(new byte[0], 0, 0);    // Send results to sink
-            //    }
-            //}
+                Console.WriteLine($"Worker{workerId} started....");
+
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    int workload;
+                    ZError error;
+
+                    using (ZFrame frame = receiver.ReceiveFrame(out error))
+                    {
+                        if (frame == null)
+                        {
+                            if (Equals(error, ZError.EAGAIN))
+                            {
+                                Thread.Sleep(1);
+                                continue;
+                            }
+                            throw new ZException(error);
+                        }
+                        workload = frame.ReadInt32();
+                    }
+
+                    sink.SendFrame(new ZFrame($"worker{workerId} workload:{workload}"));
+
+                    ProcessedMessages++;
+
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        Console.WriteLine($"Woker{workerId} cancelled....");
+
+                        context.Shutdown();
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
+                    Thread.SpinWait(100);
+                }
+            }
         }
     }
 }
