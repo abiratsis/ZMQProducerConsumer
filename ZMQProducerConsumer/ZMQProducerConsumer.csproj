@@ -5,8 +5,4 @@
     <TargetFramework>netcoreapp1.1</TargetFramework>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="libzmq_vc120" Version="4.2.20.1" />
-  </ItemGroup>
-
 </Project>
